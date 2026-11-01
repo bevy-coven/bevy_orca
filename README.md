@@ -63,7 +63,7 @@ The GIF above. `head_on`, `wall_corridor` and `street` print to the terminal, wi
 
 ## Part of the Coven
 
-`bevy_orca` is one of the [Bevy Coven](https://github.com/bevy-coven) crates: [`bevy_society`](https://crates.io/crates/bevy_society) moves its villagers with it, and [`bevy_stigmergy`](https://crates.io/crates/bevy_stigmergy) holds the fields the same crowd reads. Grimoire, the Coven's editor, walks crowds across a map with it to show where people will jam: [use it in Grimoire](https://bevy-coven.github.io/crates/bevy_orca.html#use-it-in-grimoire).
+`bevy_orca` is one of the [Bevy Coven](https://github.com/bevy-coven) crates: [`bevy_society`](https://crates.io/crates/bevy_society) moves its villagers with it, and [`bevy_stigmergy`](https://crates.io/crates/bevy_stigmergy) holds the fields the same crowd reads. The Cauldron, the Coven's editor, walks crowds across a map with it to show where people will jam: [use it in the Cauldron](https://bevy-coven.github.io/crates/bevy_orca.html#use-it-in-the-cauldron).
 
 ## Bevy compatibility
 
