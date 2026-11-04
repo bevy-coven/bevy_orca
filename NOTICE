@@ -14,6 +14,28 @@ follow that implementation closely enough that its identifiers are deliberately 
 `linear_program1` / `linear_program2` / `linear_program3`, `t_left` / `t_right`, and
 `RVO_EPSILON` (here `EPSILON`) — so the two can be read side by side.
 
+Changed from RVO2: every half-plane is stored at its point nearest the origin, and
+`linear_program3` builds each projected line from the two lines' distances to the origin
+rather than through their intersection, so the answer stays inside the speed disc to `f32`
+rounding (RVO2's can leave it by many times `maxSpeed`). The half-planes and the three
+stages are RVO2's.
+
+The obstacle lines in `src/obstacles.rs` are RVO2's too: the obstacle branch of
+`Agent::computeNewVelocity` (cutoff lines and circles round the ends of an edge, legs, the
+"foreign" leg rule, the already-covered test) case for case, with its identifiers kept
+(`left_leg_direction`, `is_left_leg_foreign`, `left_cutoff`, `t_left` / `t_right`,
+`dist_sq_cutoff`), and the per-vertex data of `Obstacle` and `RVOSimulator::addObstacle`
+(the unit direction of the edge, the convex flag, the previous and next vertex).
+
+Changed from RVO2: a polygon is given by what is solid (`add_solid`, `add_enclosure`) and
+oriented by the builder, where RVO2 asks for counter-clockwise vertices and silently ignores
+a clockwise one; edges are found by a uniform grid, where RVO2's kd-tree splits an obstacle at
+another's line, so the lines an agent gets there depend on how the tree happened to
+partition; a wall with no thickness has no "foreign" legs, because its neighbouring edge is
+its own other side, which RVO2's rule skips and an agent touching the wall's face can then
+be handed no line at all; and a zero-length direction RVO2 would normalise to NaN is
+replaced by a unit vector.
+
 The algorithms are described in:
 
     J. van den Berg, M. Lin and D. Manocha,
@@ -23,5 +45,6 @@ The algorithms are described in:
 
     J. van den Berg, S. J. Guy, M. Lin and D. Manocha,
     "Reciprocal n-Body Collision Avoidance",
-    Robotics Research: The 14th International Symposium ISRR, 2011.
-    DOI 10.1109/TRO.2011.2120810
+    Robotics Research: The 14th International Symposium ISRR,
+    Springer Tracts in Advanced Robotics 70, 2011.
+    DOI 10.1007/978-3-642-19457-3_1

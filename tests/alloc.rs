@@ -60,7 +60,7 @@ unsafe impl GlobalAlloc for Counting {
 static GLOBAL: Counting = Counting;
 
 fn agent(pos: Vec2, vel: Vec2) -> Agent {
-    Agent { pos, vel, radius: 0.5, avoids: true }
+    Agent { pos, vel, radius: 0.5, avoids: true, priority: 1.0 }
 }
 
 /// A deterministic `u32 -> [0,1)` hash (PCG-style output mix), copied by construction from the crate's
@@ -150,6 +150,7 @@ fn a_warmed_crowd_allocates_nothing() {
                 radius: 0.28,
                 max_speed: 1.5,
                 pref_vel: Some(Vec2::new(angle.cos(), angle.sin())),
+                priority: 1.0,
             }
         })
         .collect();
@@ -159,7 +160,7 @@ fn a_warmed_crowd_allocates_nothing() {
         let solved = crowd.solve(&members, &params, dt, |_, _| true, |_, buf| buf.clear());
         assert!(solved.iter().flatten().all(|v| v.is_finite()));
     };
-    // Warm: the hash map, the candidate list and the output slice all reach their working size here.
+    // Warm: the neighbour grid, the candidate list and the output slice all reach their working size.
     tick(&mut crowd);
 
     reset_counter();
@@ -167,4 +168,184 @@ fn a_warmed_crowd_allocates_nothing() {
         tick(&mut crowd);
     }
     assert_eq!(allocs(), 0, "20 warmed crowd solves allocated {} time(s)", allocs());
+}
+
+/// The same promise for a crowd that is going somewhere. Every tick here the whole group has moved two
+/// cells on, so a neighbour search that keeps storage per cell visited would allocate on every one of
+/// them and keep growing for as long as the crowd walks.
+#[test]
+fn a_warmed_crowd_that_walks_into_new_cells_allocates_nothing() {
+    use bevy_orca::{Crowd, CrowdMember, CrowdParams};
+
+    let params = CrowdParams::new(2.0);
+    let dt = 1.0 / 60.0;
+    let base: Vec<CrowdMember> = (0..60u32)
+        .map(|i| CrowdMember {
+            key: u64::from(i),
+            pos: Vec2::new((i % 10) as f32, (i / 10) as f32) * 0.9,
+            vel: Vec2::X,
+            radius: 0.28,
+            max_speed: 1.5,
+            pref_vel: Some(Vec2::X),
+            priority: 1.0,
+        })
+        .collect();
+    let at_tick = |tick: u32, members: &mut Vec<CrowdMember>| {
+        members.clear();
+        let offset = Vec2::new(tick as f32 * 2.0 * params.neighbour_range, 0.0);
+        members.extend(base.iter().map(|m| CrowdMember { pos: m.pos + offset, ..*m }));
+    };
+
+    let mut crowd = Crowd::default();
+    let mut members = Vec::with_capacity(base.len());
+    // Warm on the first tick's ground only.
+    at_tick(0, &mut members);
+    let _ = crowd.solve(&members, &params, dt, |_, _| true, |_, buf| buf.clear());
+
+    let mut made = 0;
+    for tick in 1..=20 {
+        at_tick(tick, &mut members);
+        reset_counter();
+        let solved = crowd.solve(&members, &params, dt, |_, _| true, |_, buf| buf.clear());
+        made += allocs();
+        assert!(solved.iter().flatten().all(|v| v.is_finite()));
+    }
+    assert_eq!(made, 0, "20 warmed solves of a crowd crossing new cells allocated {made} time(s)");
+}
+
+/// The same promise for a packed crowd (issue #7): 200 members 0.15 apart with a 4-unit range, so every
+/// member has 199 candidates to choose its 10 neighbours from. The standard library's stable sort
+/// takes a heap scratch above 170 such candidates, so a candidate list ordered with it allocated once
+/// per member per tick — 1 000 times in these five ticks — exactly where units bunch up.
+#[test]
+fn a_warmed_dense_crowd_allocates_nothing() {
+    use bevy_orca::{Crowd, CrowdMember, CrowdParams};
+
+    let params = CrowdParams::new(4.0);
+    let dt = 1.0 / 60.0;
+    let members: Vec<CrowdMember> = (0..200u32)
+        .map(|i| CrowdMember {
+            key: u64::from(i),
+            pos: Vec2::new((i % 20) as f32, (i / 20) as f32) * 0.15,
+            vel: Vec2::ZERO,
+            radius: 0.07,
+            max_speed: 1.5,
+            pref_vel: Some(Vec2::X),
+            priority: 1.0,
+        })
+        .collect();
+    let mut crowd = Crowd::default();
+    let _ = crowd.solve(&members, &params, dt, |_, _| true, |_, buf| buf.clear());
+
+    reset_counter();
+    for _ in 0..5 {
+        let solved = crowd.solve(&members, &params, dt, |_, _| true, |_, buf| buf.clear());
+        assert!(solved.iter().flatten().all(|v| v.is_finite()));
+    }
+    assert_eq!(allocs(), 0, "5 warmed solves of a dense crowd allocated {} time(s)", allocs());
+}
+
+/// The split step is the same ring, so it makes the same promise: once the grid, a worker per range and
+/// the output are warm, `begin` and `solve_range` over four ranges of a packed crowd allocate nothing.
+/// (Counted on this thread: the ranges run here one after another, which is what a single-threaded
+/// host does with the same API, and a worker thread has its own warm buffers to count.)
+#[test]
+fn a_warmed_split_step_allocates_nothing() {
+    use bevy_orca::{Crowd, CrowdMember, CrowdParams, CrowdWorker};
+
+    let params = CrowdParams::new(4.0);
+    let dt = 1.0 / 60.0;
+    let members: Vec<CrowdMember> = (0..200u32)
+        .map(|i| CrowdMember {
+            key: u64::from(i),
+            pos: Vec2::new((i % 20) as f32, (i / 20) as f32) * 0.15,
+            vel: Vec2::ZERO,
+            radius: 0.07,
+            max_speed: 1.5,
+            pref_vel: Some(Vec2::X),
+            priority: 1.0,
+        })
+        .collect();
+    let mut crowd = Crowd::default();
+    let mut workers: Vec<CrowdWorker> = (0..4).map(|_| CrowdWorker::default()).collect();
+    let mut out = vec![None; members.len()];
+    let tick = |crowd: &mut Crowd, workers: &mut [CrowdWorker], out: &mut [Option<Vec2>]| {
+        let step = crowd.begin(&members, &params, dt);
+        for (c, slice) in out.chunks_mut(50).enumerate() {
+            if let Some(worker) = workers.get_mut(c) {
+                step.solve_range(worker, c * 50, slice, |_, _| true, |_, buf| buf.clear());
+            }
+        }
+    };
+    tick(&mut crowd, &mut workers, &mut out);
+
+    reset_counter();
+    for _ in 0..5 {
+        tick(&mut crowd, &mut workers, &mut out);
+        assert!(out.iter().flatten().all(|v| v.is_finite()));
+    }
+    assert_eq!(allocs(), 0, "5 warmed split steps allocated {} time(s)", allocs());
+}
+
+/// And for a crowd among obstacles: the edge candidates, the grid query and the lines it casts all
+/// live in buffers that stop growing. A crowd walking a street grid of 36 buildings for 20 ticks,
+/// every one of them moving to new ground, allocates nothing once warm.
+#[test]
+fn a_warmed_crowd_among_obstacles_allocates_nothing() {
+    use bevy_orca::{Crowd, CrowdMember, CrowdParams, ObstaclesBuilder};
+
+    let mut builder = ObstaclesBuilder::new();
+    for i in 0..6 {
+        for j in 0..6 {
+            builder
+                .add_box(Vec2::new(i as f32 * 12.0 + 6.0, j as f32 * 12.0 + 6.0), Vec2::splat(4.0))
+                .expect("a building");
+        }
+    }
+    builder
+        .add_enclosure(&[
+            Vec2::new(-5.0, -5.0),
+            Vec2::new(80.0, -5.0),
+            Vec2::new(80.0, 80.0),
+            Vec2::new(-5.0, 80.0),
+        ])
+        .expect("the map's edge");
+    let obstacles = builder.build().expect("valid");
+
+    let params = CrowdParams::new(3.0);
+    let dt = 1.0 / 30.0;
+    let mut members: Vec<CrowdMember> = (0..300u32)
+        .map(|i| CrowdMember {
+            key: u64::from(i),
+            // Along the horizontal streets, y = 0 mod 12, so nobody starts inside a building.
+            pos: Vec2::new((i % 60) as f32 * 1.2 + 0.3, (i / 60) as f32 * 12.0 * 0.6 % 72.0),
+            vel: Vec2::ZERO,
+            radius: 0.3,
+            max_speed: 1.5,
+            pref_vel: Some(Vec2::new(1.0, 0.0)),
+            priority: 1.0,
+        })
+        .collect();
+    let mut crowd = Crowd::default();
+    let mut walls_extra = |_: usize, buf: &mut Vec<(Vec2, f32)>| buf.clear();
+    let start = members.clone();
+    let mut run = |members: &mut Vec<CrowdMember>, crowd: &mut Crowd| {
+        for _ in 0..22 {
+            let solved = crowd.solve_around(&obstacles, members, &params, dt, |_, _| true, &mut walls_extra);
+            assert!(solved.iter().flatten().all(|v| v.is_finite()));
+            for (m, s) in members.iter_mut().zip(solved) {
+                m.vel = s.unwrap_or(Vec2::ZERO);
+                m.pos += m.vel * dt;
+            }
+        }
+    };
+    // Warm: a buffer grows to the widest call it has seen (the most edges in range of one member),
+    // and a crowd on the move meets new maxima, so the whole walk is made once.
+    run(&mut members, &mut crowd);
+
+    // The same walk again, from the same start: nothing is wider than before, so nothing grows.
+    members = start;
+    reset_counter();
+    run(&mut members, &mut crowd);
+    assert_eq!(allocs(), 0, "a warmed walk among obstacles allocated {} time(s)", allocs());
 }
