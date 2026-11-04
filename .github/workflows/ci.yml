@@ -37,8 +37,9 @@ jobs:
 
       # **The load-bearing step, and it is `build` rather than `test` deliberately.**
       #
-      # `cargo test` compiles dev-dependencies, and this crate's dev-dependency is the FULL `bevy`
-      # umbrella. Cargo unifies features across a build, so under `cargo test` this crate silently
+      # A test run compiles dev-dependencies, and this crate's dev-dependency is the FULL `bevy`
+      # umbrella. Cargo unifies features across a build, so under `cargo nextest run` this crate
+      # silently
       # receives every Bevy feature there is — including `glam/std`, which the manifest is explicit
       # about NOT asking for, because it swaps glam's transcendentals from libm to std's. A plain
       # `cargo build` takes no dev-dependencies and so compiles the feature set a consumer gets.
@@ -54,11 +55,19 @@ jobs:
       - name: Build with every feature
         run: cargo build --all-features
 
+      - uses: taiki-e/install-action@nextest
+
       - name: Test
-        run: cargo test
+        run: cargo nextest run --no-fail-fast
 
       - name: Test with every feature
-        run: cargo test --all-features
+        run: cargo nextest run --all-features --no-fail-fast
+
+      - name: Doctests (nextest does not run them)
+        run: cargo test --doc
+
+      - name: Doctests with every feature (nextest does not run them)
+        run: cargo test --doc --all-features
 
       - name: Build examples
         run: cargo build --examples

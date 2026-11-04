@@ -124,4 +124,4 @@ The rest of the family, so a host learns one shape:
 
 ## License
 
-MIT OR Apache-2.0, at your option. Derived from RVO2 (Apache-2.0) — see [`NOTICE`](NOTICE).
+MIT OR Apache-2.0, at your option. Derived from RVO2 (Apache-2.0) — see [`NOTICE`](https://github.com/bevy-coven/bevy_orca/blob/main/NOTICE).
